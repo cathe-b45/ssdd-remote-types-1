@@ -1,5 +1,3 @@
-"""Implementation of custom sets."""
-
 from typing import Optional
 
 
@@ -18,12 +16,25 @@ class StringSet(set):
         StringSet(iterable) -> new StringSet object
         """
         self.upper_case = force_upper_case
-        super().__init__(*args, **kwargs)
+
+        # Nuevo código para verificar tipos en la inicialización
+        if args:
+            iterable = args[0]
+            new_iterable = []
+            for item in iterable:
+                if not isinstance(item, str):
+                    raise ValueError(f"El elemento '{item}' no es una cadena")
+                if self.upper_case:
+                    item = item.upper()
+                new_iterable.append(item)
+            super().__init__(new_iterable, **kwargs)
+        else:
+            super().__init__(**kwargs)
 
     def add(self, item: str) -> None:
         """Add an element to a set. Checks the element type to be a str."""
         if not isinstance(item, str):
-            raise ValueError(item)
+            raise ValueError(f"El elemento '{item}' no es una cadena")
 
         if self.upper_case:
             item = item.upper()

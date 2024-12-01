@@ -1,5 +1,3 @@
-"""remotetypes server application."""
-
 import logging
 
 import Ice
