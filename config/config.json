@@ -1,0 +1,7 @@
+{
+    "kafka_input_topic": "proxy_check",
+    "kafka_output_topic": "check_result",
+    "kafka_group_id": "group1",
+    "kafka_bootstrap_servers": "localhost:9092",
+    "ice_proxy_string": ""
+}
