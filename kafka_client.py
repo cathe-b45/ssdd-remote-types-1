@@ -126,8 +126,11 @@ def consume_and_process_messages(consumer, producer, factory, config):
         if msg.error():
             raise confluent_kafka.KafkaException(msg.error())
         else:
-            # Decode and parse the JSON payload.
-            event_list = json.loads(msg.value().decode())
+            try:
+                event_list = json.loads(msg.value().decode())
+            except json.JSONDecodeError:
+                print(f"Received invalid JSON: {msg.value().decode()}")
+                continue
 
             # Initialize a list to hold the results for all operations found in this message.
             message = []
