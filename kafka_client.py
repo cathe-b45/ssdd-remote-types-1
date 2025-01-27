@@ -141,22 +141,24 @@ def consume_and_process_messages(consumer, producer, factory, config):
                 
                 # Build the response for each operation:
                 if error:
-                    # If an error occurred, store the error message in the response.
-                    message.append({"id": op["id"], "status": "error", "error": error})
+                    if op.get("id") is not None:
+                        message.append({"id": op["id"], "status": "error", "error": error})
+
                 elif result is not None:
                     # If the operation succeeded and returned a non-null result, include it.
                     message.append({"id": op["id"], "status": "ok", "result": result})
                 else:
                     # If the operation succeeded but did not return a result, omit the 'result' key.
                     message.append({"id": op["id"], "status": "ok"})
+                    
+            if message:
+                # Publish the response to the output topic and ensure 
+                # the message is flushed to Kafka.
+                producer.produce(config['kafka_output_topic'], value=json.dumps(message))
+                producer.flush()
 
-            # Publish the response to the output topic and ensure 
-            # the message is flushed to Kafka.
-            producer.produce(config['kafka_output_topic'], value=json.dumps(message))
-            producer.flush()
 
-
-def get_rtype_proxy(factory, obj_type):
+def get_rtype_proxy(factory, obj_type, obj_identifier):
     """
     Retrieves the specific remote proxy (RList, RDict, RSet, etc.) from the 
     provided factory based on the 'obj_type'. If the 'obj_type' is not recognized, 
@@ -171,15 +173,15 @@ def get_rtype_proxy(factory, obj_type):
     """
     if obj_type == "RList":
         return rt.RemoteTypes.RListPrx.checkedCast(
-            factory.get(rt.RemoteTypes.TypeName.RList)
+            factory.get(rt.RemoteTypes.TypeName.RList, obj_identifier)
         )
     elif obj_type == "RDict":
         return rt.RemoteTypes.RDictPrx.checkedCast(
-            factory.get(rt.RemoteTypes.TypeName.RDict)
+            factory.get(rt.RemoteTypes.TypeName.RDict, obj_identifier)
         )
     elif obj_type == "RSet":
         return rt.RemoteTypes.RSetPrx.checkedCast(
-            factory.get(rt.RemoteTypes.TypeName.RSet)
+            factory.get(rt.RemoteTypes.TypeName.RSet, obj_identifier)
         )
     else:
         # If we do not recognize the object type, return None 
@@ -323,12 +325,17 @@ def hacer_evento(factory, event):
              returned by the operation, and 'error' is a string describing 
              an error if one occurs, or None otherwise.
     """
+
+    if not all(key in event for key in ["id", "object_type", "object_identifier", "operation"]):
+        return None, "MalformedOperation"
+
     obj_type = event["object_type"]
+    obj_identifier = event["object_identifier"]
     operation = event["operation"]
     args = event.get("args", {})
 
     # 1. Obtain the appropriate proxy using the factory based on the object type.
-    rtype_prx = get_rtype_proxy(factory, obj_type)
+    rtype_prx = get_rtype_proxy(factory, obj_type, obj_identifier)
     if rtype_prx is None:
         # If obj_type is unrecognized, return an error.
         return None, "UnknownObjectType"
