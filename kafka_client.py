@@ -129,7 +129,10 @@ def consume_and_process_messages(consumer, producer, factory, config):
             try:
                 event_list = json.loads(msg.value().decode())
             except json.JSONDecodeError:
-                print(f"Received invalid JSON: {msg.value().decode()}")
+                print(f"Invalid JSON received: {msg.value().decode()}")
+                continue
+            except Exception as e:
+                print(f"Unexpected error: {type(e).__name__}: {str(e)}")
                 continue
 
             # Initialize a list to hold the results for all operations found in this message.
@@ -247,40 +250,19 @@ def process_rlist(rtype_prx, operation, args):
     """
     result, error = None, None
     if operation == "append":
-        rtype_prx.append(args["item"])
+        rtype_prx.append(**args)
     elif operation == "pop":
         # 'pop' may optionally require an 'index'.
         if "index" in args:
-            rtype_prx.pop(int(args["index"]))
+            rtype_prx.pop(**args)
         else:
             rtype_prx.pop()
     elif operation == "getItem":
         # 'getItem' needs an 'index' to retrieve the element at that position.
-        result = rtype_prx.getItem(int(args["index"]))
-    return result, error
-
-
-def process_rdict(rtype_prx, operation, args):
-    """
-    Handles operations specific to RDict objects.
-    These include 'setItem', 'getItem', and 'pop'.
-
-    :param rtype_prx: A proxy to an RDict remote object.
-    :param operation: Name of the operation to perform.
-    :param args: Arguments such as 'key' and 'item' for dict manipulations.
-    :return: A tuple (result, error) indicating the result of the operation 
-             or any error encountered.
-    """
-    result, error = None, None
-    if operation == "setItem":
-        # 'setItem' requires both 'key' and 'item'.
-        rtype_prx.setItem(args["key"], args["item"])
-    elif operation == "getItem":
-        # 'getItem' requires a 'key' to retrieve the corresponding value.
-        result = rtype_prx.getItem(args["key"])
-    elif operation == "pop":
-        # 'pop' in RDict requires a 'key' to remove from the dictionary.
-        rtype_prx.pop(args["key"])
+        result = rtype_prx.getItem(**args)
+    else:
+        # If the operation is not recognized, return an error.
+        error = "OperationNotSupported"
     return result, error
 
 
@@ -298,7 +280,32 @@ def process_rset(rtype_prx, operation, args):
     result, error = None, None
     if operation == "add":
         # 'add' requires an 'item' argument to insert into the set.
-        rtype_prx.add(args["item"])
+        rtype_prx.add(**args)
+    elif operation == "pop":
+        # 'pop' removes and returns an arbitrary element from the set 
+        # (though the remote method may handle it differently).
+        rtype_prx.pop()
+    else:
+        # If the operation is not recognized, return an error.
+        error = "OperationNotSupported"
+    return result, error
+
+
+def process_rset(rtype_prx, operation, args):
+    """
+    Handles operations specific to RSet objects.
+    These include 'add' and 'pop'.
+
+    :param rtype_prx: A proxy to an RSet remote object.
+    :param operation: Name of the operation to perform.
+    :param args: Arguments such as 'item' which might be required for 'add'.
+    :return: A tuple (result, error) indicating the result of the operation 
+             or any error encountered.
+    """
+    result, error = None, None
+    if operation == "add":
+        # 'add' requires an 'item' argument to insert into the set.
+        rtype_prx.add(**args)
     elif operation == "pop":
         # 'pop' removes and returns an arbitrary element from the set 
         # (though the remote method may handle it differently).
@@ -334,6 +341,17 @@ def hacer_evento(factory, event):
     operation = event["operation"]
     args = event.get("args", {})
 
+    if args is None or not isinstance(args, dict):
+        return None, "InvalidArgs"
+
+    expected_args = get_expected_args(obj_type, operation)
+    
+    for arg_name, arg_type in expected_args.items():
+        if arg_name not in args:
+            return None, f"Missing argument: {arg_name}"
+        if not isinstance(args[arg_name], arg_type):
+            return None, f"Invalid argument type for {arg_name}: Expected {arg_type.__name__}"
+
     # 1. Obtain the appropriate proxy using the factory based on the object type.
     rtype_prx = get_rtype_proxy(factory, obj_type, obj_identifier)
     if rtype_prx is None:
@@ -349,19 +367,95 @@ def hacer_evento(factory, event):
 
     # 3. If not handled as a common operation, dispatch to specialized logic 
     #    based on the object type (RList, RDict, or RSet).
-    if obj_type == "RList":
-        result, error = process_rlist(rtype_prx, operation, args)
-    elif obj_type == "RDict":
-        result, error = process_rdict(rtype_prx, operation, args)
-    elif obj_type == "RSet":
-        result, error = process_rset(rtype_prx, operation, args)
-    else:
-        # This else clause should not occur if 'get_rtype_proxy' 
-        # handles all recognized types, but is here for safety.
-        error = "UnknownObjectType"
+    try:
+        if obj_type == "RList":
+            result, error = process_rlist(rtype_prx, operation, args)
+        elif obj_type == "RDict":
+            result, error = process_rdict(rtype_prx, operation, args)
+        elif obj_type == "RSet":
+            result, error = process_rset(rtype_prx, operation, args)
+        else:
+            # This else clause should not occur if 'get_rtype_proxy' 
+            # handles all recognized types, but is here for safety.
+            error = "UnknownObjectType"
+    except Exception as e:
+        return None, e._class.name_
 
     return result, error
 
+
+def get_expected_args(obj_type, operation):
+    """
+    Returns a dictionary of expected arguments and their types for a given object type and operation.
+
+    :param obj_type: The type of the object (RList, RDict, RSet).
+    :param operation: The operation being performed (e.g., "append", "getItem").
+    :return: A dictionary where keys are argument names and values are their expected types.
+    """
+    if obj_type == "RList":
+        if operation == "append":
+            return {"item": str}
+        elif operation == "pop":
+            return {"index": int}
+        elif operation == "getItem":
+            return {"index": int}
+    elif obj_type == "RDict":
+        if operation == "setItem":
+            return {"key": str, "item": str}
+        elif operation == "getItem":
+            return {"key": str}
+        elif operation == "pop":
+            return {"key": str}
+    elif obj_type == "RSet":
+        if operation == "add":
+            return {"item": str}
+        elif operation == "pop":
+            return {}
+    return {}
+
+def process_common_operation(rtype_prx, operation, args):
+    """
+    Executes the operations that are shared among multiple remote object 
+    types (RList, RDict, RSet). These include:
+      - identifier
+      - remove
+      - length
+      - contains
+      - hash
+      - iter (which is not supported in this example)
+
+    If an operation is not recognized here, this function returns (None, None), 
+    indicating that the operation might be specific to a particular object type 
+    and should be handled elsewhere.
+
+    :param rtype_prx: A proxy object to the remote RList, RDict, or RSet.
+    :param operation: The name of the operation (a string).
+    :param args: A dictionary containing additional arguments needed 
+                 by the operation (e.g., "item", "index", etc.).
+    :return: A tuple (result, error). If the operation produces a result, 
+             'result' will be a non-None value. If the operation fails or 
+             is unsupported, 'error' will contain a non-None string.
+    """
+    if operation == "identifier":
+        return rtype_prx.identifier(), None
+    elif operation == "remove":
+        # 'remove' requires an 'item' argument to remove from the remote object.
+        rtype_prx.remove(**args)
+        return None, None
+    elif operation == "length":
+        return rtype_prx.length(), None
+    elif operation == "contains":
+        # 'contains' requires an 'item' argument to check for membership.
+        return rtype_prx.contains(**args), None
+    elif operation == "hash":
+        return rtype_prx.hash(), None
+    elif operation == "iter":
+        # For demonstration, we assume 'iter' is not supported here.
+        return None, "OperationNotSupported"
+
+    # If the operation is not one of the above, return (None, None) 
+    # so the caller can process it as a specialized operation.
+    return None, None
 
 def main():
     """
